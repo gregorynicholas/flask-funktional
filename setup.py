@@ -17,7 +17,12 @@ links
 """
 from setuptools import setup
 
-requires = open("requirements.txt", "r").readlines()
+with open("requirements.txt", "r") as f:
+  requires = f.readlines()
+
+with open("README.md", "r") as f:
+  long_description = f.read()
+
 
 setup(
   name="flask-funktional",
@@ -27,7 +32,7 @@ setup(
   author='gregorynicholas',
   author_email='gn@gregorynicholas.com',
   description=__doc__,
-  long_description=__doc__,
+  long_description=long_description,
   py_modules=['flask_funktional'],
   zip_safe=False,
   platforms='any',

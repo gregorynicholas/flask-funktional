@@ -9,18 +9,22 @@
   :license: MIT, see LICENSE for more details.
 """
 from __future__ import unicode_literals
-from flask import Flask, templating
+from flask import Flask, templating, testing
 from flask import url_for as _url_for
 from flask.testsuite import FlaskTestCase
-from werkzeug import cached_property
+from io import BytesIO
 from json import loads
+from werkzeug import cached_property
 
 __version__ = "0.0.1"
 
 __all__ = [
-  "TestCase",
+  "TestCase", "random_string",
   # signal events defined in this module
-  "pre_setup_signal", "post_teardown_signal",
+  "signals_available", "pre_setup_signal", "post_teardown_signal",
+  # file upload helpers
+  "UploadTestCase", "UploadRequest", "UploadFlaskClient",
+  "httpfile", "temphttpfile",
 ]
 
 
@@ -172,7 +176,7 @@ class TestCase(FlaskTestCase, HttpAssertionsMixin):
     intitializes the class setup. doing setup here means subclasses don't have
     to call `super.setup()`.
     """
-    self.templates = []
+    self.rendered_templates = []
     self.render_templates = True
     if signals_available:
       pre_setup_signal.send(self)
@@ -203,6 +207,8 @@ class TestCase(FlaskTestCase, HttpAssertionsMixin):
     self.app.response_class = self._make_response_cls(
       self.app.response_class)
 
+    if hasattr(self, "test_client_class"):
+      self.app.test_client_class = self.test_client_class
     self.client = self.app.test_client()
     # self._ctx = self.app.test_request_context()
     # self._ctx.push()
@@ -260,7 +266,7 @@ class TestCase(FlaskTestCase, HttpAssertionsMixin):
     hopes to avoid test code from ever having to statically define url's
     to internal flask routes.
 
-      :param handler: string path to the route handler.
+      :param handler: string path to the route handler. ex: app.module.route1
     """
     with self.app.test_request_context():
       url = _url_for(handler, **kw)
@@ -273,15 +279,15 @@ class TestCase(FlaskTestCase, HttpAssertionsMixin):
           return None, pre
         return pre + name, path
 
-  def open(self, handler, method_args, *args, **kw):
-    base_url, url = self.url_for(handler, **method_args)
-    follow_redirects = kw.pop('follow_redirects', True)
-    return self.client.open(
-      url, follow_redirects=follow_redirects, base_url=base_url, *args, **kw)
-
   def get(self, handler, url_args={}, *args, **kw):
     return self.open(
       handler, url_args, method='GET', *args, **kw)
+
+  def open(self, handler, handler_args, *args, **kw):
+    base_url, url = self.url_for(handler, **handler_args)
+    follow_redirects = kw.pop("follow_redirects", True)
+    return self.client.open(
+      url, follow_redirects=follow_redirects, base_url=base_url, *args, **kw)
 
   # template patching + assertions + helpers..
   # ---------------------------------------------------------------------------
@@ -290,7 +296,7 @@ class TestCase(FlaskTestCase, HttpAssertionsMixin):
     """
     binds to the signal sent in flask.templating
     """
-    self.templates.append((template, context))
+    self.rendered_templates.append((template, context))
 
   def _monkey_patch_render_template(self):
     self._true_render = templating._render
@@ -305,7 +311,7 @@ class TestCase(FlaskTestCase, HttpAssertionsMixin):
     """
     if not signals_available:
       raise RuntimeError("Signals not supported")
-    for template, context in self.templates:
+    for template, context in self.rendered_templates:
       if template.name == name:
         return True
     raise AssertionError("template %s not rendered".format(name))
@@ -324,7 +330,7 @@ class TestCase(FlaskTestCase, HttpAssertionsMixin):
     """
     if not signals_available:
       raise RuntimeError("Signals not supported")
-    for template, context in self.templates:
+    for template, context in self.rendered_templates:
       if name in context:
         return context[name]
     raise ContextVariableDoesNotExist
@@ -342,3 +348,100 @@ class TestCase(FlaskTestCase, HttpAssertionsMixin):
     except ContextVariableDoesNotExist:
       self.fail("Context variable does not exist: %s" % name)
   assert_template_context = assertTemplateContext
+
+
+# file upload testing..
+# ---------------------------------------------------------------------------
+
+from random import choice
+from string import letters, digits
+from StringIO import StringIO
+from flask import Request
+
+
+class UploadFlaskClient(testing.FlaskClient):
+  """
+  `flask.testing.FlaskClient` subclass which provides an uplooad method to
+  post data to an application.
+  """
+
+  def upload(self, handler, *uploads, **kw):
+    """
+      :param handler:
+      :param uploads: tuple of (formname, filepath)
+      :param headers:
+    """
+    headers = {"enctype": "multipart/form-data"}
+    headers.update(kw.pop("headers", {}))
+    data = {}
+
+    for upload in uploads:
+      bytes, name, _ = httpfile(filename=upload(1))
+      data[upload(0)] = (bytes, name)
+
+    return self.open(
+      handler, handler_args=kw, data=data, headers=headers)
+
+
+class UploadRequest(Request):
+  """
+  overrides the `_get_file_stream` method return an instance of `FileUploadIO`
+  """
+  def _get_file_stream(*args, **kwargs):
+    return FileUploadIO()
+
+
+class FileUploadIO(StringIO):
+  type_options = {}
+
+  def close(self):
+    """
+    overriden to do nothing.
+    """
+
+
+class UploadTestCase(TestCase):
+  """
+  `TestCase` subclass which
+  """
+  test_client_class = UploadFlaskClient
+
+  def setup_pre_hook(self):
+    self._app.request_class = self.app.request_class
+    self.app.request_class = UploadRequest
+
+  def teardown_post_hook(self):
+    self.app.request_class = self._app_request_class
+
+
+def httpfile(path):
+  """
+  open a file as a StringIO object to use with a flask test client.
+
+    :param path: string path to a file
+
+    :returns: tuple for bytes, filename, size
+  """
+  with open(path, "r") as f:
+    data = f.read()
+    size = len(data)
+  return (StringIO(data), path, size)
+
+
+def temphttpfile(filename=None, data=None, size=None):
+  """
+  create an on-the-fly StringIO object to use with a flask test client.
+
+    :param data: string of the filename
+    :param filename: optional string of the filename
+    :param size: if data is None, generates data of the specified size
+
+    :returns: tuple for bytes, filename, size
+  """
+  if data is None and size:
+    data = random_string(size)
+  return (BytesIO(data), filename, len(data))
+
+
+def random_string(size):
+  return "".join([choice(letters + digits) for _ in range(size)])
