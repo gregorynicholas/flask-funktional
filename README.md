@@ -9,7 +9,7 @@ flask-funktional
 
 * [docs](http://gregorynicholas.github.io/flask-funktional)
 * [source](http://github.com/gregorynicholas/flask-funktional)
-* [package](http://packages.python.org/flask-funktional)
+* [package](https://pypi.python.org/pypi/flask-funktional)
 * [changelog](https://github.com/gregorynicholas/flask-funktional/blob/master/CHANGES.md)
 
 
