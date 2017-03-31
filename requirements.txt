@@ -4,4 +4,4 @@ blinker==1.2
 
 nose
 nose-cov
-mock
+mock==2.0.0
