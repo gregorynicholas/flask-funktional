@@ -3,5 +3,5 @@ werkzeug==0.8.3
 blinker==1.2
 
 nose
-nose-cov
+nose-cov==1.6
 mock
